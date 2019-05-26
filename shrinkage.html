@@ -1,0 +1,136 @@
+﻿<!DOCTYPE html>
+<html>
+<!--
+    Author: Ramalingeshwar Vedagiri
+    Date: 2019-05-18
+-->
+<head>
+    <meta charset="UTF-8">
+
+    <script src="../PapaParse-4.6.0/papaparse.min.js"></script>
+    <script src="../Chart.js-2.8.0/dist/Chart.bundle.min.js"></script>
+
+    <script>
+        function read_text_file(file_path, callback)
+        {
+            let file = new XMLHttpRequest();
+            file.overrideMimeType("text/plain");
+            file.open("GET", file_path, true);
+            file.send(null);
+            file.onreadystatechange = function () {
+                if(file.readyState === 4) {
+                    if(file.status === 200 || file.status == 0) {
+                        callback(file.responseText);
+                    }
+                }
+            }
+        }
+
+        function parse_csv(csv_text) {
+            let data = Papa.parse(csv_text, { header: true, skipEmptyLines: true });
+            return data;
+        }
+
+        // Time string must be in hh:mm format
+        function time_string_to_minutes(time_string) {
+            let h = parseInt(time_string.substring(0, 2));
+            let m = parseInt(time_string.substring(3, 5));
+
+            return h * 60 + m;
+        }
+
+        function minutes_to_time_string(minutes) {
+            let h = Math.floor(minutes / 60).toString();
+            let m = (minutes % 60).toString();
+
+            if (h.length < 2)
+                h = "0" + h;
+            if (m.length < 2)
+                m = "0" + m;
+
+            return h + ":" + m;
+        }
+
+        function get_interval_start(minutes, interval_step) {
+            let h = Math.floor(minutes / 60);
+            let m = minutes % 60;
+
+            return h * 60 + Math.floor(m / interval_step) * interval_step;
+        }
+
+        function get_interval_end(minutes, interval_step) {
+            let h = Math.floor(minutes / 60);
+            let m = minutes % 60;
+
+            return h * 60 + Math.ceil(m / interval_step) * interval_step;
+        }
+
+        function get_duration_within_interval(interval_start, interval_end, start, end) {
+            if (start >= interval_end || end <= interval_start)
+                return 0; // Period does not fall within the specified interval
+
+            return Math.min(interval_end, end) - Math.max(interval_start, start);
+        }
+
+        function process_parsed_csv(data, exceptions_data) {
+            console.log(data);
+            console.log(exceptions_data);
+
+            let interval_step = 15;
+            let hoop_start = 8 * 60;
+            let hoop_end = 18 * 60;
+
+            let days = {};
+            for (let i = 0; i < data.data.length; ++i) {
+                let line = data.data[i];
+                let mins_start = time_string_to_minutes(line.start);
+                let mins_end = time_string_to_minutes(line.end);
+                let int_start = get_interval_start(mins_start, interval_step);
+                let int_end = get_interval_end(mins_end, interval_step);
+
+                if (days[line.date] === undefined) {
+                    days[line.date] = {};
+                    days[line.date].intervals = create_interval_slots(hoop_start, hoop_end, interval_step);
+                }
+
+                for (ii = int_start; ii < int_end; ii += interval_step) {
+                    dur = get_duration_within_interval(ii, ii + interval_step, mins_start, mins_end);
+                    if (days[line.date].intervals[ii].codes[line.state] === undefined) {
+                        days[line.date].intervals[ii].codes[line.state] = { name: line.state, duration: 0 };
+                    }
+                    days[line.date].intervals[ii].codes[line.state].duration += dur;
+                }
+
+                //console.log(mins_start + " " + line.start + " " + minutes_to_time_string(mins_start));
+                console.log("Code " + line.state + " starts at interval " + minutes_to_time_string(int_start) + " ends at " + minutes_to_time_string(int_end) + " with dur " + minutes_to_time_string(dur));
+            }
+
+            console.log(">>> ");
+            console.log(days);
+        }
+
+        function create_interval_slots(start, end, interval_step) {
+            let intervals = {};
+            for (let i = start; i < end; i += interval_step) {
+                intervals[i] = { codes: {} };
+            }
+            return intervals;
+        }
+
+        function main() {
+            read_text_file("file:///C:/Users/Sun/Documents/JavaScript/Shrinkage/shrink.csv", function (csv_text) {
+                let csv_data = parse_csv(csv_text);
+                read_text_file("file:///C:/Users/Sun/Documents/JavaScript/Shrinkage/except.csv", function (csv_exceptions_text) {
+                    let exceptions_data = parse_csv(csv_exceptions_text);
+                    process_parsed_csv(csv_data, exceptions_data);
+                });
+            });
+        }
+
+        main();
+    </script>
+</head>
+<body>
+
+</body>
+</html>
