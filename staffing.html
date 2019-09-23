@@ -1,0 +1,324 @@
+﻿<!DOCTYPE html>
+<html>
+<!--
+    Author: Ramalingeshwar Vedagiri
+    Date: 2019-05-18
+-->
+<style>
+    .row {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        align-content: center;
+    }
+    .column {
+        display: flex;
+        flex-direction: column;
+        margin: 10px;
+        align-content: flex-start;
+    }
+</style>
+<head>
+    <meta charset="UTF-8">
+
+    <script src="../PapaParse-4.6.0/papaparse.min.js"></script>
+    <script src="../Chart.js-2.8.0/dist/Chart.bundle.min.js"></script>
+
+    <script>
+        "use strict";
+
+        function read_text_file(file_path, callback)
+        {
+            let file = new XMLHttpRequest();
+            file.overrideMimeType("text/plain");
+            file.open("GET", file_path, true);
+            file.send(null);
+            file.onreadystatechange = function () {
+                if(file.readyState === 4) {
+                    if(file.status === 200 || file.status === 0) {
+                        callback(file.responseText);
+                    }
+                }
+            }
+        }
+
+        function parse_csv(csv_text) {
+            let data = Papa.parse(csv_text, { header: true, skipEmptyLines: true });
+            return data;
+        }
+
+        // Time string must be in hh:mm format
+        function time_string_to_minutes(time_string) {
+            let h = parseInt(time_string.substring(0, 2));
+            let m = parseInt(time_string.substring(3, 5));
+
+            return h * 60 + m;
+        }
+
+        function minutes_to_time_string(minutes) {
+            let h = Math.floor(minutes / 60).toString();
+            let m = (minutes % 60).toString();
+
+            if (h.length < 2)
+                h = "0" + h;
+            if (m.length < 2)
+                m = "0" + m;
+
+            return h + ":" + m;
+        }
+
+        function calc_interval_start(minutes, interval_step) {
+            return minutes - minutes % interval_step;
+        }
+
+        function calc_interval_end(minutes, interval_step) {
+            return (minutes - 1) - (minutes - 1) % interval_step + interval_step;
+        }
+
+        function calc_crossover_duration(interval_start, interval_end, start, end) {
+            return Math.max(0, Math.min(interval_end, end) - Math.max(interval_start, start));
+        }
+
+        function get_state_list() {
+            let state_list = [];
+            
+            state_list.push("Onebill UK");
+            state_list.push("COAC");
+            return state_list;
+        }
+
+        function add_location_to_csv_data(csv_data) {
+            let location_match_list = [
+                {location_code: "_GUR_", location: "Gurgaon"},
+                {location_code: "_KOL_", location: "Kolata"},
+                {location_code: "_KOLK_", location: "Kolkata"},
+                {location_code: "_NOTT_", location: "Nottingham"},
+                {location_code: "_LIVE_", location: "Liverpool"},
+                {location_code: "_BELF_", location: "Belfast"},
+                {location_code: "_BREN_", location: "Brentwood"},
+                {location_code: "_GLAS_", location: "Glasgow"},
+                {location_code: "_GLASGOW_", location: "Glasgow"},
+                {location_code: "_LOND_", location: "Londonderry"}
+            ];
+
+            for (let i = 0; i < csv_data.data.length; ++i) {
+                let line = csv_data.data[i];
+                csv_data.data[i].location = "Other";
+                for (let j = 0; j < location_match_list.length; ++j) {
+                    if (line.team.search(location_match_list[j].location_code) != -1) {
+                        csv_data.data[i].location = location_match_list[j].location;
+                        break;
+                    }
+                }
+            }
+        }
+
+        function process_parsed_csv(csv_data) {
+            add_location_to_csv_data(csv_data);
+            let date_list = filter_unique_records(csv_data.data, "date", function(data) { return true });
+            let state_list = get_state_list();
+            
+            let interval_data = {};
+            interval_data.state_list = [];
+
+            for (let i = 0; i < state_list.length; ++i) {
+                interval_data.state_list[i] = { state: state_list[i], location_list: [] };
+                let filter_condition = function(data) {
+                    return data.state === state_list[i];
+                }
+                let found_locations = filter_unique_records(csv_data.data, "location", filter_condition);
+                for (let j = 0; j < found_locations.length; ++j) {
+                    interval_data.state_list[i].location_list[j] = { location: found_locations[j], date_list: [] };
+                    for (let k = 0; k < date_list.length; ++k) {
+                        let condition = function (line) {
+                            return line["date"] === date_list[k] && line["location"] === found_locations[j] && line["state"] === state_list[i];
+                        }
+                        let entry = { date: date_list[k], intervals: extract_interval_data(csv_data, condition) };
+                        interval_data.state_list[i].location_list[j].date_list.push(entry);
+                    }
+                }
+            }
+
+            console.log(interval_data);
+            //create_and_show_table(interval_data);
+        }
+
+        function extract_interval_data(csv_data, condition_func) {
+            let interval_step = 15;
+            let intervals = create_intervals(8*60, 18*60, interval_step); // create hoop from 08:00 to 18:00 -Rama
+
+            for (let i = 0; i < csv_data.data.length; ++i) {
+                let line = csv_data.data[i];
+                if (condition_func(line)) {
+                    let m_start = time_string_to_minutes(line.start);
+                    let m_end = time_string_to_minutes(line.end);
+                    let interval_last = calc_interval_end(m_end, interval_step);
+
+                    for (let j = calc_interval_start(m_start, interval_step); j < interval_last; j += interval_step) {
+                        intervals[j].duration += calc_crossover_duration(j, j + interval_step, m_start, m_end);
+                    }
+                }
+            }
+
+            calc_intervals_fte(intervals, interval_step);
+            return intervals;            
+        }
+
+        function filter_unique_records(data, record_name, condition_func) {
+            let set = {};
+            let uniques = [];
+            for (let i = 0; i < data.length; ++i) {
+                if (condition_func(data[i])) {
+                    set[data[i][record_name]] = 1;
+                }
+            }
+
+            for (var s in set) {
+                if (set.hasOwnProperty(s)) {
+                    uniques.push(s);
+                }
+            }
+            return uniques;
+        }
+
+        function create_intervals(start, end, interval_step) {
+            let intervals = {};
+            for (let i = start; i < end; i += interval_step) {
+                intervals[i] = { time_string: minutes_to_time_string(i), duration: 0, fte: 0 };
+            }
+            return intervals;
+        }
+
+        function create_state_table(state_data) {
+            let table = document.createElement("table");
+            let thead = document.createElement("thead");
+            let tr = document.createElement("tr");
+            let tbody = document.createElement("tbody");
+
+            let th = document.createElement("th");
+            th.innerText = "Intervals";
+            tr.appendChild(th);
+            // Setup headers which are the dates
+            for (let i = 0; i < state_data.date_list.length; ++i) {
+                let th = document.createElement("th");
+                th.innerText = state_data.date_list[i].date;
+                tr.appendChild(th);
+            }
+            thead.appendChild(tr);
+            table.appendChild(thead);
+            
+            for (var i in state_data.date_list[0].intervals) {
+                if (state_data.date_list[0].intervals.hasOwnProperty(i)) {
+                    tr = document.createElement("tr");
+                    let td = document.createElement("td");
+                    td.innerText = state_data.date_list[0].intervals[i].time_string;
+                    tr.appendChild(td);
+                    for (let j = 0; j < state_data.date_list.length; ++j) {
+                        let td = document.createElement("td");
+                        td.innerText = state_data.date_list[j].intervals[i].fte.toFixed(2);
+                        tr.appendChild(td);
+                    }
+                    tbody.appendChild(tr);
+                }
+            }
+            table.appendChild(tbody);
+            return table;
+        }
+
+        function create_and_show_table(interval_data) {
+            let table_container = document.getElementById("table_main_container");
+
+            for (let i = 0; i < interval_data.state_list.length; ++i) {
+                state_data = interval_data.state_list[i];
+                for (let j = 0; j < state_data.location_list.length; ++j) {
+                    let table_div = document.createElement("div");
+                    let table = create_state_table(state_data.location_list[j]);
+
+                    let export_link = document.createElement("a");
+                    export_link.download = state_data.state + " " + state_data.location_list[j].location + ".csv";
+                    export_link.innerText = state_data.state + " " + state_data.location_list[j].location;
+                    let csv_text = convert_to_csv_text(state_data.location_list[j]);
+                    let csv = new Blob([csv_text], { type: "text/csv" });
+                    if (window.navigator && window.navigator.msSaveOrOpenBlob) {
+                        export_link.onclick = function() {
+                            window.navigator.msSaveOrOpenBlob(csv, export_link.download);
+                        }
+                        export_link.href = "javascript:void(0);";
+                    } else {
+                        export_link.href = window.URL.createObjectURL(csv);
+                    }
+                    
+                    table_div.appendChild(export_link);
+                    table_div.appendChild(table);
+                    table_container.appendChild(table_div);
+            }
+        }
+
+        function convert_to_csv_text(state_data) {
+            let csv_text = "";
+
+            csv_text += "Intervals";
+            for (let i = 0; i < state_data.date_list.length; ++i) {
+                csv_text += "," + state_data.date_list[i].date;
+            }
+            csv_text += "\n";
+
+            for (var i in state_data.date_list[0].intervals) {
+                if (state_data.date_list[0].intervals.hasOwnProperty(i)) {
+                    csv_text += state_data.date_list[0].intervals[i].time_string;
+                    for (let j = 0; j < state_data.date_list.length; ++j) {
+                        csv_text += "," + state_data.date_list[j].intervals[i].fte.toFixed(2);
+                    }
+                }
+                csv_text += "\n";
+            }
+            return csv_text;
+        }
+
+        function calc_intervals_fte(intervals, interval_step) {
+            for (var i in intervals) {
+                if (intervals.hasOwnProperty(i)) {
+                    intervals[i].fte = intervals[i].duration / interval_step;
+                }
+            }
+        }
+
+        function main() {
+            read_text_file("file:///C:/Users/Sun/Documents/JavaScript/Shrinkage/shrink.csv", function (csv_text) {
+                let csv_data = parse_csv(csv_text);
+                process_parsed_csv(csv_data);
+            });
+        }
+
+        function calc_schedule_states_intervals(file) {
+                let csv_data = parse_csv(file.target.result);
+                process_parsed_csv(csv_data);
+        }
+
+        function on_states_file_selected(event) {
+            let states_file = new FileReader();
+            states_file.onload = calc_schedule_states_intervals;
+            states_file.readAsText(event.target.files[0]);
+        }
+
+        function things_to_do_on_load() {
+            document.getElementById("schedule_states").addEventListener("change", on_states_file_selected, false);
+        }
+        window.onload = things_to_do_on_load;
+    </script>
+</head>
+<body>
+    <div class="row">
+        <div class="column">
+            <span>Schedule states</span>
+            <!-- <span>Staffing states</span> -->
+        </div>
+        <div class="column">
+            <input type="file" id="schedule_states">
+            <!-- <input type="file" id="staffing_states"> -->
+        </div>
+    </div>
+
+    <div id="table_main_container" class="row"></div>
+</body>
+</html>
